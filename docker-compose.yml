@@ -1,0 +1,52 @@
+name: loadwatch
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: loadwatch
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-loadwatch}
+      POSTGRES_DB: loadwatch
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loadwatch -d loadwatch"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  collector:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://loadwatch:${POSTGRES_PASSWORD:-loadwatch}@db:5432/loadwatch
+      METER_HOSTS: ${METER_HOSTS:-192.168.178.213}
+      METER_PORT: ${METER_PORT:-6053}
+      METER_NOISE_PSK: ${METER_NOISE_PSK:-}
+      EVENT_THRESHOLD_W: ${EVENT_THRESHOLD_W:-80}
+      EVENT_MIN_DURATION_S: ${EVENT_MIN_DURATION_S:-3}
+      EVENT_CLOSE_BAND_W: ${EVENT_CLOSE_BAND_W:-40}
+      EVENT_CLOSE_HOLD_S: ${EVENT_CLOSE_HOLD_S:-3}
+      EVENT_MAX_S: ${EVENT_MAX_S:-14400}
+    command: ["python", "-m", "app.collector"]
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://loadwatch:${POSTGRES_PASSWORD:-loadwatch}@db:5432/loadwatch
+      API_TOKEN: ${API_TOKEN:-loadwatch-dev}
+    ports:
+      - "${API_PORT:-8099}:8000"
+    command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]
+
+volumes:
+  dbdata:

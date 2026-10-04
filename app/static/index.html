@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>loadwatch</title>
+<style>
+  :root { --bg:#0f1115; --card:#171a21; --fg:#e8eaf0; --mut:#8b93a7; --acc:#4da3ff; --ok:#39d98a; --warn:#ffb454; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  header { display:flex; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid #23262f; flex-wrap:wrap; }
+  h1 { font-size:16px; margin:0 12px 0 0; letter-spacing:.5px; }
+  .mut { color:var(--mut); }
+  input,select,button { background:#0b0d12; color:var(--fg); border:1px solid #2a2f3a; border-radius:6px; padding:6px 8px; font:inherit; }
+  button { cursor:pointer; border-color:#31415a; }
+  button:hover { border-color:var(--acc); }
+  main { display:grid; grid-template-columns:1fr; gap:16px; padding:16px; max-width:1200px; }
+  .row { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid #23262f; border-radius:10px; padding:14px; }
+  .k { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.6px; }
+  .v { font-size:26px; margin-top:4px; }
+  canvas { width:100%; height:220px; display:block; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #23262f; white-space:nowrap; }
+  th { color:var(--mut); font-weight:600; }
+  tr.done td { color:var(--mut); }
+  .pos { color:var(--warn); } .neg { color:var(--ok); }
+  .pill { display:inline-block; padding:1px 7px; border-radius:99px; background:#222833; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>loadwatch</h1>
+  <span class="mut" id="conn">connecting…</span>
+  <span class="mut">token</span><input id="token" size="18" placeholder="API token" type="password">
+  <button onclick="saveToken()">save</button>
+  <span class="mut" id="device"></span>
+  <span style="margin-left:auto"></span>
+  <a class="mut" id="export" href="#" download>export csv</a>
+</header>
+
+<main>
+  <div class="row">
+    <div class="card"><div class="k">now</div><div class="v" id="now">–<span class="mut" style="font-size:14px"> W</span></div></div>
+    <div class="card"><div class="k">import today</div><div class="v" id="imp">–</div></div>
+    <div class="card"><div class="k">export today</div><div class="v" id="exp">–</div></div>
+    <div class="card"><div class="k">gas</div><div class="v" id="gas">–</div></div>
+    <div class="card"><div class="k">events / labelled</div><div class="v" id="evc">–</div></div>
+  </div>
+
+  <div class="card">
+    <div class="k" style="margin-bottom:8px">aggregate power (W) — <span id="rangeLbl">6 h</span></div>
+    <div class="row" style="margin-bottom:10px">
+      <button onclick="loadPower(1)">1 h</button><button onclick="loadPower(6)">6 h</button>
+      <button onclick="loadPower(24)">24 h</button><button onclick="loadPower(168)">7 d</button>
+      <button onclick="showEvents()">show detected events</button>
+    </div>
+    <canvas id="chart" width="1100" height="220"></canvas>
+  </div>
+
+  <div class="card">
+    <div class="k" style="margin-bottom:8px">load episodes — label them (this is the dataset)</div>
+    <table><thead><tr>
+      <th>#</th><th>start</th><th>ΔW</th><th>peak</th><th>dur</th><th>Wh</th><th>label</th><th></th>
+    </tr></thead><tbody id="evbody"><tr><td colspan="8" class="mut">loading…</td></tr></tbody></table>
+  </div>
+</main>
+
+<script>
+// injected by the API: "" standalone, "/loadwatch" behind the portal sub-path
+const P = '__PREFIX__';
+let TOKEN = localStorage.getItem('lw_token') || '';
+document.getElementById('token').value = TOKEN;
+let APPLIANCES = [];
+
+function saveToken(){ TOKEN = document.getElementById('token').value.trim(); localStorage.setItem('lw_token', TOKEN); refresh(); }
+async function api(path, opts){
+  opts = opts || {}; opts.headers = Object.assign({'Authorization':'Bearer '+TOKEN}, opts.headers||{});
+  const r = await fetch(P + path, opts);
+  if(!r.ok) throw new Error(path+' -> '+r.status);
+  return r.json();
+}
+const fmt = n => (n===null||n===undefined) ? '–' : n.toLocaleString(undefined,{maximumFractionDigits:1});
+
+async function refresh(){
+  try {
+    const s = await api('/api/status');
+    document.getElementById('conn').textContent = 'live';
+    document.getElementById('conn').style.color = 'var(--ok)';
+    document.getElementById('device').textContent = s.device;
+    const L = s.latest || {};
+    document.getElementById('now').innerHTML = fmt(L['power_consumed_phase_1']?.value) + '<span class="mut" style="font-size:14px"> W</span>';
+    const c = s.counters || {};
+    document.getElementById('imp').textContent = fmt(c.e_cons_t1) + ' kWh';
+    document.getElementById('exp').textContent = fmt(c.e_prod_t1) + ' kWh';
+    document.getElementById('gas').textContent = fmt(L['gas_consumed']?.value) + ' m³';
+    document.getElementById('evc').textContent = s.events.total + ' / ' + s.events.labelled;
+  } catch(e){
+    document.getElementById('conn').textContent = 'error: ' + e.message;
+    document.getElementById('conn').style.color = '#ff6b6b';
+  }
+}
+
+async function loadPower(hours){
+  document.getElementById('rangeLbl').textContent = hours >= 24 ? (hours/24)+' d' : hours+' h';
+  const d = await api('/api/power?hours='+hours);
+  drawSeries(d.points.map(p => p.max), d.points.map(p => p.avg));
+}
+
+async function showEvents(){
+  const d = await api('/api/power?hours=168');
+  const ev = await api('/api/events?limit=200');
+  const t0 = new Date(d.points[0].t).getTime(), t1 = new Date(d.points[d.points.length-1].t).getTime();
+  const markers = ev.events.map(e => ({t:new Date(e.ts_start).getTime(), dw:e.delta_w}));
+  drawSeries(d.points.map(p=>p.max), d.points.map(p=>p.avg), {t0,t1,markers});
+}
+
+function drawSeries(maxs, avgs, opts){
+  const c = document.getElementById('chart'), ctx = c.getContext('2d');
+  const W = c.width, H = c.height, pad = 28;
+  ctx.clearRect(0,0,W,H);
+  const all = maxs.concat(avgs).filter(v => v!=null);
+  if(!all.length){ ctx.fillStyle='#8b93a7'; ctx.fillText('no data yet', pad, H/2); return; }
+  const hi = Math.max.apply(null, all), lo = Math.min.apply(null, all);
+  const X = i => pad + i*(W-2*pad)/Math.max(1,maxs.length-1);
+  const Y = v => H-pad - (v-lo)*(H-2*pad)/Math.max(1,(hi-lo));
+  ctx.strokeStyle = '#23262f'; ctx.beginPath(); ctx.moveTo(pad,H-pad); ctx.lineTo(W-pad,H-pad); ctx.stroke();
+  ctx.fillStyle = '#8b93a7'; ctx.fillText(Math.round(hi)+' W', 4, pad); ctx.fillText(Math.round(lo)+' W', 4, H-pad);
+  // max envelope
+  ctx.strokeStyle = '#2c4a6e'; ctx.beginPath();
+  maxs.forEach((v,i) => v==null?0:(i?ctx.lineTo(X(i),Y(v)):ctx.moveTo(X(i),Y(v)))); ctx.stroke();
+  // avg line
+  ctx.strokeStyle = '#4da3ff'; ctx.lineWidth = 2; ctx.beginPath();
+  avgs.forEach((v,i) => v==null?0:(i?ctx.lineTo(X(i),Y(v)):ctx.moveTo(X(i),Y(v)))); ctx.stroke(); ctx.lineWidth = 1;
+  if(opts && opts.markers){
+    ctx.fillStyle = '#ffb454';
+    opts.markers.forEach(m => {
+      if(m.t < opts.t0 || m.t > opts.t1) return;
+      const i = Math.round((m.t-opts.t0)/Math.max(1,(opts.t1-opts.t0))*(maxs.length-1));
+      ctx.fillRect(X(i)-1, pad, 2, H-2*pad);
+    });
+  }
+}
+
+async function loadEvents(){
+  const d = await api('/api/events?limit=100');
+  APPLIANCES = d.appliances.filter(a => a.is_large !== false).map(a => a.name);
+  const b = document.getElementById('evbody');
+  if(!d.events.length){ b.innerHTML = '<tr><td colspan="8" class="mut">no events yet — they appear as loads switch</td></tr>'; return; }
+  b.innerHTML = d.events.map(e => {
+    const opts = ['<option value="">—</option>'].concat(APPLIANCES.map(a =>
+      '<option'+(a===e.appliance?' selected':'')+'>'+a+'</option>')).join('');
+    return '<tr class="'+(e.appliance?'done':'')+'">'
+      + '<td>'+e.id+'</td>'
+      + '<td>'+new Date(e.ts_start).toLocaleTimeString()+'<span class="mut"> '+new Date(e.ts_start).toLocaleDateString()+'</span></td>'
+      + '<td class="'+((e.delta_w||0)>0?'pos':'neg')+'">'+Math.round(e.delta_w)+'</td>'
+      + '<td>'+Math.round(e.peak_w)+'</td>'
+      + '<td>'+(e.duration_s==null?'open':Math.round(e.duration_s)+'s')+'</td>'
+      + '<td>'+fmt(e.energy_wh)+'</td>'
+      + '<td><select onchange="label('+e.id+', this.value)">'+opts+'</select>'
+      + (e.label_source?' <span class="pill">'+e.label_source+'</span>':'')+'</td>'
+      + '<td><a class="mut" href="#" onclick="dump('+e.id+');return false">trace</a></td>'
+      + '</tr>';
+  }).join('');
+}
+
+async function label(id, appliance){
+  if(!appliance) return;
+  await api('/api/events/'+id+'/label?appliance='+encodeURIComponent(appliance), {method:'POST'});
+  loadEvents(); refresh();
+}
+
+async function dump(id){
+  const d = await api('/api/events/'+id+'/window');
+  const lines = d.samples.map(s => s.t+' '+s.w);
+  const blob = new Blob([lines.join('\n')], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'event_'+id+'.txt'; a.click();
+}
+
+function updateExport(){ document.getElementById('export').href = P + '/api/export.csv?days=30'; }
+
+(async function init(){
+  updateExport();
+  await refresh(); await loadEvents(); await loadPower(6);
+  setInterval(refresh, 5000);
+  setInterval(() => { loadEvents(); updateExport(); }, 60000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+.env
+*.pyc
+__pycache__/
+.venv/
+venv/
+project_state.md
+*.csv
+*.parquet
+data/

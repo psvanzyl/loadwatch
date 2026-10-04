@@ -1,0 +1,44 @@
+# loadwatch — Tier-0 NILM dataset service (runs on dev CT141, 192.168.178.20:8099)
+#
+# Public URL: https://xm2561.duckdns.org/loadwatch
+#
+# IMPORTANT: this host's apex (xm2561.duckdns.org) is Headscale's coordination
+# endpoint (see headscale.yml). That router is a bare `Host()` catch-all and is
+# deliberately left untouched. This router is strictly longer
+# (`Host() && PathPrefix()`), so Traefik's length-based priority gives it the
+# /loadwatch prefix only — /ts2021, /derp, /key, /register, /api/v1/* and
+# /health keep flowing to Headscale.
+#
+# StripPrefix: the container serves "/" and stays standalone-clean; Traefik
+# strips /loadwatch and (v2.5+) sets X-Forwarded-Prefix, which the app uses to
+# emit prefixed asset/API URLs for the browser.
+http:
+  routers:
+    loadwatch-http:
+      rule: "Host(`xm2561.duckdns.org`) && PathPrefix(`/loadwatch`)"
+      entryPoints:
+        - http
+      service: loadwatch
+      middlewares:
+        - redirect-to-https
+    loadwatch:
+      rule: "Host(`xm2561.duckdns.org`) && PathPrefix(`/loadwatch`)"
+      entryPoints:
+        - https
+      tls:
+        certResolver: letsencrypt
+      service: loadwatch
+      middlewares:
+        - loadwatch-strip
+
+  middlewares:
+    loadwatch-strip:
+      stripPrefix:
+        prefixes:
+          - "/loadwatch"
+
+  services:
+    loadwatch:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.178.20:8099"
